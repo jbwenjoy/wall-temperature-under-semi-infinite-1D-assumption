@@ -2,6 +2,7 @@ from cProfile import label
 import numpy as np
 from scipy import interpolate as spip
 import matplotlib.pyplot as plt
+import pandas as pd
 
 """
 一维非稳态传热
@@ -119,17 +120,17 @@ if __name__ == "__main__":
 
     """
     定义流体（干空气）参数：
-    air_tem     温度        ℃
-    air_pres    压力        Pa
-    air_rho     密度        kg/m^3
-    air_cp      比热        J/(kg*K)
-    air_lam     导热系数    W/(m*K)
-    air_a       热扩散率    m^2/s
-    air_miu     黏度        kg/(m*s)
-    air_v       动力粘度    m^2/s
-    air_Pr      空气普朗特数
+    air_final_tem   最终温度    ℃
+    air_pres        压力        Pa
+    air_rho         密度        kg/m^3
+    air_cp          比热        J/(kg*K)
+    air_lam         导热系数    W/(m*K)
+    air_a           热扩散率    m^2/s
+    air_miu         黏度        kg/(m*s)
+    air_v           动力粘度    m^2/s
+    air_Pr          空气普朗特数
     """
-    # air_tem = init_tem + 30
+    air_final_tem = init_tem + 30
     air_pres = 1.01325 * pow(10, 5)
     air_rho = 0
     air_cp = 0
@@ -140,11 +141,6 @@ if __name__ == "__main__":
     air_Pr = 0
 
     """
-    h(float)    对流换热系数    W/(m^2*K)
-    """
-    h = 50  # 默认对流换热系数为50，除非专门计算
-
-    """
     定义仿真条件：
     num_of_nodes(int)   节点数
     step_x(float)       空间步长    m
@@ -153,50 +149,88 @@ if __name__ == "__main__":
     """
     num_of_nodes = 100
     step_x = 0.0001
-    step_time = 0.001
-    endtime = 1000
-
-    """
-    定义结果变量：
-    tem_cur_time(np.array)  当前时间各节点温度  ℃
-    tem_next_time(np.array) 下一时间各节点温度  ℃
-    """
-    tem_cur_time = np.full(num_of_nodes, init_tem)  # 1D array
-    tem_next_time = np.full(num_of_nodes, init_tem)  # 1D array
+    step_time = 0.01
+    endtime = 100
     iteration_times = int(endtime / step_time)  # 迭代次数
-    boundary_tem = np.zeros(iteration_times + 1)  # 保存初始和每次迭代的壁面温度
-    boundary_tem[0] = init_tem
-    far_boundary_tem = np.zeros(iteration_times + 1)  # 保存远处边界温度
-    far_boundary_tem[0] = init_tem
-    time_array = np.zeros(iteration_times + 1)  # 保存初始和每次迭代的时刻
 
-    air_tem = np.full(iteration_times + 1, init_tem)
+    # 初始化每次迭代的主流温度
+    ramp_time = 30  # 温度斜坡上升的持续时间
+    air_tem = np.full(iteration_times + 1, (float)(init_tem))
     for i in range(iteration_times + 1):
         # air_tem[i] = 50  # 阶梯加热
-        if i * step_time <= 30:  # 斜坡加热
-            air_tem[i] = 20 + i * (50 - 20) / (30 / step_time)
+        if i * step_time <= ramp_time:  # 斜坡加热
+            air_tem[i] = init_tem + i * (air_final_tem - init_tem) / (
+                ramp_time / step_time
+            )
         else:
-            air_tem[i] = 50
+            air_tem[i] = (float)(air_final_tem)
+    # print(air_tem)
 
-    current_time = 0
-    for i in range(iteration_times):
-        current_time += step_time
-        # print(current_time)
-        time_array[i + 1] = current_time
-        tem_next_time = single_iteration(
-            num_of_nodes, step_x, step_time, a, tem_cur_time, air_tem[i]
+    """
+    h(float)    对流换热系数    W/(m^2*K)
+    """
+    h = 50  # 默认对流换热系数为50，除非专门计算
+    for different_h in range(1, 11):
+        h = 10 * different_h
+        print("h =", h)
+
+        # 校验迭代步长是否合理
+        Fo = a * step_time / step_x / step_x  # 中间节点
+        FoBi = (
+            1
+            - 2 * h * step_time / rho / c / step_x
+            - 2 * a * step_time / step_x / step_x
         )
-        boundary_tem[i + 1] = tem_next_time[0]
-        far_boundary_tem[i + 1] = tem_next_time[num_of_nodes - 1]
-        tem_cur_time = tem_next_time
+        print("Fo =", Fo)
+        print("FoBi =", FoBi)
+        assert Fo - 0.5 < 0 and FoBi >= 0
+
+        """
+        定义结果变量：
+        tem_cur_time(np.array)  当前时间各节点温度  ℃
+        tem_next_time(np.array) 下一时间各节点温度  ℃
+        """
+        tem_cur_time = np.full(num_of_nodes, init_tem)  # 1D array
+        tem_next_time = np.full(num_of_nodes, init_tem)  # 1D array
+        boundary_tem = np.zeros(iteration_times + 1)  # 保存初始和每次迭代的壁面温度
+        boundary_tem[0] = init_tem
+        far_boundary_tem = np.zeros(iteration_times + 1)  # 保存远处边界温度
+        far_boundary_tem[0] = init_tem
+        time_array = np.zeros(iteration_times + 1)  # 保存初始和每次迭代的时刻
+
+        # 开始迭代计算
+        current_time = 0
+        for i in range(iteration_times):
+            current_time += step_time
+            # print(current_time)
+            time_array[i + 1] = current_time
+            tem_next_time = single_iteration(
+                num_of_nodes, step_x, step_time, a, tem_cur_time, air_tem[i]
+            )
+            boundary_tem[i + 1] = tem_next_time[0]
+            far_boundary_tem[i + 1] = tem_next_time[num_of_nodes - 1]
+            tem_cur_time = tem_next_time
+
+        plt.scatter(
+            time_array, boundary_tem, 0.5, marker="o", label=("t$_w,h={}$".format(h))
+        )
+        # plt.scatter(time_array, far_boundary_tem, 0.5, marker="o", label="Far boundary temperature")
+
+        data = pd.DataFrame(
+            {
+                "time/s": time_array,
+                "wall tem/°C": boundary_tem,
+                "mainstream tem/°C": air_tem,
+                "far boundary tem/°C": far_boundary_tem,
+            }
+        )
+        data.to_csv("斜坡加热h={}.csv".format(h), index=False, sep=",")
 
     plt.autoscale(enable=True, axis="both")
-    plt.scatter(time_array, boundary_tem, 0.5, marker="o", label="Boundary temperature")
-    plt.scatter(
-        time_array, far_boundary_tem, 0.5, marker="o", label="Far boundary temperature"
-    )
-    plt.scatter(time_array, air_tem, 0.5, marker="o", label="Mainstream temperature")
-    plt.title("Temperature-time plot under boundary condition III (Analytical)")
+    # plt.scatter(time_array, boundary_tem, 0.5, marker="o", label="Boundary temperature")
+    # plt.scatter(time_array, far_boundary_tem, 0.5, marker="o", label="Far boundary temperature")
+    plt.scatter(time_array, air_tem, 0.5, marker="o", label="t$_\infty$")
+    plt.title("Temperature-time plot(Analytical)")
     plt.xlabel("Time(s)")
     plt.ylabel("Temperature(℃)")
     plt.legend()
